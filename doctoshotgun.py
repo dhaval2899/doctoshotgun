@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 import sys
+import os
 import re
 import logging
 import tempfile
-from time import sleep
+from time import process_time_ns, sleep
 import json
 from urllib.parse import urlparse
 import datetime
 import argparse
 import getpass
 import unicodedata
+
+from abc import abstractmethod, ABCMeta
 
 from dateutil.parser import parse as parse_date
 from dateutil.relativedelta import relativedelta
@@ -107,9 +110,10 @@ class CentersPage(HTMLPage):
             # JavaScript:
             # var t = (e = r()(e)).data("u")
             #     , n = atob(t.replace(/\s/g, '').split('').reverse().join(''));
-            
+
             import base64
-            href = base64.urlsafe_b64decode(''.join(span.attrib['data-u'].split())[::-1]).decode()
+            href = base64.urlsafe_b64decode(
+                ''.join(span.attrib['data-u'].split())[::-1]).decode()
             query = dict(parse.parse_qsl(parse.urlsplit(href).query))
 
             if 'page' in query:
@@ -121,8 +125,9 @@ class CentersPage(HTMLPage):
 
             if 'page' in query:
                 return int(query['page'])
-        
+
         return None
+
 
 class CenterResultPage(JsonPage):
     pass
@@ -246,6 +251,7 @@ class Doctolib(LoginBrowser):
         self.session = session
 
     def __init__(self, *args, **kwargs):
+
         super().__init__(*args, **kwargs)
         self.session.headers['sec-fetch-dest'] = 'document'
         self.session.headers['sec-fetch-mode'] = 'navigate'
@@ -266,6 +272,7 @@ class Doctolib(LoginBrowser):
                 log('Cloudflare is unable to connect to Doctolib server. Please retry later.', color='red')
             raise
         try:
+
             self.login.go(json={'kind': 'patient',
                                 'username': self.username,
                                 'password': self.password,
@@ -285,6 +292,7 @@ class Doctolib(LoginBrowser):
                     json={'two_factor_auth_method': 'email'}, method="POST")
                 code = input("Enter auth code: ")
             try:
+
                 self.challenge.go(
                     json={'auth_code': code, 'two_factor_auth_method': 'email'}, method="POST")
             except HTTPNotFound:
@@ -294,12 +302,17 @@ class Doctolib(LoginBrowser):
         return True
 
     def find_centers(self, where, motives=None, page=1):
+
         if motives is None:
             motives = self.vaccine_motives.keys()
         for city in where:
             try:
+
                 self.centers.go(where=city, params={
-                                'ref_visit_motive_ids[]': motives, 'page': page})
+                    'ref_visit_motive_ids[]': motives, 'page': page})
+
+           
+
             except ServerError as e:
                 if e.response.status_code in [503]:
                     if 'text/html' in e.response.headers['Content-Type'] \
@@ -548,8 +561,78 @@ class Doctolib(LoginBrowser):
         return self.page.doc['confirmed']
 
 
-class DoctolibDE(Doctolib):
-    BASEURL = 'https://www.doctolib.de'
+class ICountryBuilder(metaclass=ABCMeta):
+
+    @staticmethod
+    @abstractmethod
+    def buildCountry(self):
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def getCountry(self):
+        pass
+
+
+class Country(Doctolib):
+
+    def __init__(self, countryname, username, password, responses_dirname): 
+        if countryname == "fr":
+            self.BASEURL = 'https://www.doctolib.fr'
+            self.centers = URL(
+                r'/vaccination-covid-19/(?P<where>\w+)', CentersPage)
+            self.center = URL(r'/centre-de-sante/.*', CenterPage)
+        elif countryname == "dr":
+            self.BASEURL = 'https://www.doctolib.de'
+            self.centers = URL(
+                r'/impfung-covid-19-corona/(?P<where>\w+)', CentersPage)
+            self.center = URL(r'/praxis/.*', CenterPage)
+        super().__init__(username, password, responses_dirname=responses_dirname)
+
+    def setKeys(self, key):
+        self.KEY_PFIZER = key.KEY_PFIZER
+        self.KEY_PFIZER_SECOND = key.KEY_PFIZER_SECOND
+        self.KEY_PFIZER_THIRD = key.KEY_PFIZER_THIRD
+        self.KEY_MODERNA = key.KEY_MODERNA
+        self.KEY_MODERNA_SECOND = key.KEY_MODERNA_SECOND
+        self.KEY_MODERNA_THIRD = key.KEY_MODERNA_THIRD
+        self.KEY_JANSSEN = key.KEY_JANSSEN
+        self.KEY_ASTRAZENECA = key.KEY_ASTRAZENECA
+        self.KEY_ASTRAZENECA_SECOND = key.KEY_ASTRAZENECA_SECOND
+        self.vaccine_motives = key.vaccine_motives
+
+
+class CountryBuilder(ICountryBuilder):
+
+    country = None
+    countryname = ''
+
+    def __init__(self, countryname, username, password, responses_dirname):
+        self.country = Country(countryname, username,
+                               password, responses_dirname=responses_dirname)
+        self.countryname = countryname
+
+    def buildCountry(self):
+        if self.countryname == "fr":
+            self.country.setKeys(DoctolibDE())
+        elif self.countryname == "de":
+            self.country.setKeys(DoctolibFR())
+        return self
+
+    def getCountry(self):
+        return self.country
+
+
+class CountryDirector:
+    @staticmethod
+    def construct(countryname, username, password, responses_dirname):
+        return CountryBuilder(countryname, username, password, responses_dirname)\
+            .buildCountry()\
+            .getCountry()
+
+
+class DoctolibDE():
+   
     KEY_PFIZER = '6768'
     KEY_PFIZER_SECOND = '6769'
     KEY_PFIZER_THIRD = None
@@ -570,12 +653,10 @@ class DoctolibDE(Doctolib):
         KEY_ASTRAZENECA: 'AstraZeneca',
         KEY_ASTRAZENECA_SECOND: 'Zweit.*AstraZeneca|AstraZeneca.*Zweit',
     }
-    centers = URL(r'/impfung-covid-19-corona/(?P<where>\w+)', CentersPage)
-    center = URL(r'/praxis/.*', CenterPage)
 
 
-class DoctolibFR(Doctolib):
-    BASEURL = 'https://www.doctolib.fr'
+class DoctolibFR():
+   
     KEY_PFIZER = '6970'
     KEY_PFIZER_SECOND = '6971'
     KEY_PFIZER_THIRD = '8192'
@@ -597,9 +678,6 @@ class DoctolibFR(Doctolib):
         KEY_ASTRAZENECA_SECOND: '2de.*AstraZeneca',
     }
 
-    centers = URL(r'/vaccination-covid-19/(?P<where>\w+)', CentersPage)
-    center = URL(r'/centre-de-sante/.*', CenterPage)
-
 
 class Application:
     @classmethod
@@ -620,10 +698,9 @@ class Application:
     def main(self, cli_args=None):
         colorama.init()  # needed for windows
 
-        doctolib_map = {
-            "fr": DoctolibFR,
-            "de": DoctolibDE
-        }
+        countries = ["fr", "de"]
+           
+     
 
         parser = argparse.ArgumentParser(
             description="Book a vaccine slot on Doctolib")
@@ -662,7 +739,7 @@ class Application:
         parser.add_argument('--dry-run', action='store_true',
                             help='do not really book the slot')
         parser.add_argument(
-            'country', help='country where to book', choices=list(doctolib_map.keys()))
+            'country', help='country where to book', choices = countries)
         parser.add_argument('city', help='city where to book')
         parser.add_argument('username', help='Doctolib username')
         parser.add_argument('password', nargs='?', help='Doctolib password')
@@ -681,12 +758,17 @@ class Application:
         if not args.password:
             args.password = getpass.getpass()
 
-        docto = doctolib_map[args.country](
-            args.username, args.password, responses_dirname=responses_dirname)
+        # docto =  Country(
+        #     args.username, args.password, responses_dirname=responses_dirname)
+
+        docto = CountryDirector.construct(
+            args.country, args.username, args.password, responses_dirname)
+
         if not docto.do_login(args.code):
             return 1
 
         patients = docto.get_patients()
+
         if len(patients) == 0:
             print("It seems that you don't have any Patient registered in your Doctolib account. Please fill your Patient data on Doctolib Website.")
             return 1
@@ -791,7 +873,9 @@ class Application:
         while True:
             log_ts()
             try:
+
                 for center in docto.find_centers(cities, motives):
+
                     if args.center:
                         if center['name_with_title'] not in args.center:
                             logging.debug("Skipping center '%s'" %
@@ -839,8 +923,10 @@ class Application:
                     sleep(SLEEP_INTERVAL_AFTER_CENTER)
 
                     log('')
-                log('No free slots found at selected centers. Trying another round in %s sec...', SLEEP_INTERVAL_AFTER_RUN)
+                log('No free slots found at selected centers. Trying another round in %s sec...',
+                    SLEEP_INTERVAL_AFTER_RUN)
                 sleep(SLEEP_INTERVAL_AFTER_RUN)
+
             except CityNotFound as e:
                 print('\n%s: City %s not found. Make sure you selected a city from the available countries.' % (
                     colored('Error', 'red'), colored(e, 'yellow')))
@@ -855,6 +941,7 @@ class Application:
                 message = template.format(type(e).__name__, e.args)
                 print(message)
                 return 1
+
         return 0
 
 

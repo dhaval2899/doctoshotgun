@@ -32,15 +32,88 @@ SLEEP_INTERVAL_AFTER_LOGIN_ERROR = 10
 SLEEP_INTERVAL_AFTER_CENTER = 1
 SLEEP_INTERVAL_AFTER_RUN = 5
 
+'''State Pattern'''
+from abc import ABCMeta, abstractmethod
+import time
+
+'''Class whose behaviour going to change 
+by maintaining the states of the code Execution'''
+class Execution():
+    finalStatus = ''
+    def __init__(self):
+
+        self.states = [
+            ExecutionStarted,
+            Error,
+            ExecutionFinished
+        ]
+        self.currentState = None
+
+    def status(self, code, error = None):
+       
+        if code == 0:
+            self.currentState = self.states[code]
+            executionStartedLog = self.currentState.changeState('')   
+            self.finalStatus = 'Execution start time: ' + executionStartedLog
+
+        elif code == 1:
+            self.currentState = self.states[code]
+            self.finalStatus += '\n' + 'errorlog: ' + self.currentState.changeState(error)
+            # print(self.finalStatus)
+            '''creating a database connection here and storing 
+            the self.finalStatus data in it for further analysis'''
+
+        elif code == 2:
+            self.currentState = self.states[code]
+            ExecutionFinishedLog = self.currentState.changeState('')
+            self.finalStatus += '\nExectuion end time: ' + ExecutionFinishedLog
+            # print(self.finalStatus)
+            '''creating a database connection here and storing 
+            the self.finalStatus data in it for further analysis'''
+
+        
+'''Interface for the State'''
+class IState(metaclass=ABCMeta):
+    @staticmethod
+    @abstractmethod
+    def changeState(error):
+       pass
+
+'''Concrete  subclass implements IState'''
+class ExecutionStarted(IState):
+    @staticmethod
+    def changeState(error):
+        return str(time.time())
+
+'''Concrete  subclass implements IState'''
+class Error(IState):
+    @staticmethod
+    def changeState(error):
+        return str(error.with_traceback)
+
+'''Concrete  subclass implements IState'''
+class ExecutionFinished(IState):
+    @staticmethod
+    def changeState(status):
+       return str(time.time())
+
+'''Initializing Execution class and storing
+the instance in a global variable accessible
+through out the code'''
+execution = Execution()
+
+'''*************'''
+
+
 try:
     from playsound import playsound as _playsound, PlaysoundException
 
     def playsound(*args):
         try:
             return _playsound(*args)
-        except (PlaysoundException, ModuleNotFoundError):
+        except (PlaysoundException, ModuleNotFoundError) as e:
             pass  # do not crash if, for one reason or another, something wrong happens
-except ImportError:
+except ImportError as e:
     def playsound(*args):
         pass
 
@@ -258,6 +331,7 @@ class Doctolib(LoginBrowser):
         try:
             self.open(self.BASEURL + '/sessions/new')
         except ServerError as e:
+            execution.status(1,e)
             if e.response.status_code in [503] \
                 and 'text/html' in e.response.headers['Content-Type'] \
                     and ('cloudflare' in e.response.text or 'Checking your browser before accessing' in e .response.text):
@@ -271,7 +345,8 @@ class Doctolib(LoginBrowser):
                                 'password': self.password,
                                 'remember': True,
                                 'remember_username': True})
-        except ClientError:
+        except ClientError as e:
+            execution.status(1,e)
             print('Wrong login/password')
             return False
 
@@ -287,7 +362,8 @@ class Doctolib(LoginBrowser):
             try:
                 self.challenge.go(
                     json={'auth_code': code, 'two_factor_auth_method': 'email'}, method="POST")
-            except HTTPNotFound:
+            except HTTPNotFound as e:
+                execution.status(1,e)
                 print("Invalid auth code")
                 return False
 
@@ -301,6 +377,7 @@ class Doctolib(LoginBrowser):
                 self.centers.go(where=city, params={
                                 'ref_visit_motive_ids[]': motives, 'page': page})
             except ServerError as e:
+                execution.status(1,e)
                 if e.response.status_code in [503]:
                     if 'text/html' in e.response.headers['Content-Type'] \
                         and ('cloudflare' in e.response.text or
@@ -312,6 +389,7 @@ class Doctolib(LoginBrowser):
                     return
                 raise
             except HTTPNotFound as e:
+                execution.status(1,e)
                 raise CityNotFound(city) from e
 
             next_page = self.page.get_next_page()
@@ -328,7 +406,8 @@ class Doctolib(LoginBrowser):
                 )
                 try:
                     yield page.doc['search_result']
-                except KeyError:
+                except KeyError as e:
+                    execution.status(1,e)
                     pass
 
             if next_page:
@@ -600,7 +679,6 @@ class DoctolibFR(Doctolib):
     centers = URL(r'/vaccination-covid-19/(?P<where>\w+)', CentersPage)
     center = URL(r'/centre-de-sante/.*', CenterPage)
 
-
 class Application:
     @classmethod
     def create_default_logger(cls):
@@ -617,6 +695,7 @@ class Application:
         logging.root.setLevel(level)
         logging.root.addHandler(self.create_default_logger())
 
+    
     def main(self, cli_args=None):
         colorama.init()  # needed for windows
 
@@ -696,13 +775,13 @@ class Application:
             print('Available patients are:')
             for i, patient in enumerate(patients):
                 print('* [%s] %s %s' %
-                      (i, patient['first_name'], patient['last_name']))
+                    (i, patient['first_name'], patient['last_name']))
             while True:
                 print('For which patient do you want to book a slot?',
-                      end=' ', flush=True)
+                    end=' ', flush=True)
                 try:
                     docto.patient = patients[int(sys.stdin.readline().strip())]
-                except (ValueError, IndexError):
+                except (ValueError, IndexError) as e:
                     continue
                 else:
                     break
@@ -768,6 +847,7 @@ class Application:
                 start_date = datetime.datetime.strptime(
                     args.start_date, '%d/%m/%Y').date()
             except ValueError as e:
+                execution.status(1,e)
                 print('Invalid value for --start-date: %s' % e)
                 return 1
         else:
@@ -777,6 +857,7 @@ class Application:
                 end_date = datetime.datetime.strptime(
                     args.end_date, '%d/%m/%Y').date()
             except ValueError as e:
+                execution.status(1,e)
                 print('Invalid value for --end-date: %s' % e)
                 return 1
         else:
@@ -795,7 +876,7 @@ class Application:
                     if args.center:
                         if center['name_with_title'] not in args.center:
                             logging.debug("Skipping center '%s'" %
-                                          center['name_with_title'])
+                                        center['name_with_title'])
                             continue
                     if args.center_regex:
                         center_matched = False
@@ -834,6 +915,8 @@ class Application:
                         log('')
                         log('💉 %s Congratulations.' %
                             colored('Booked!', 'green', attrs=('bold',)))
+                        '''finished execution'''
+                        execution.status(2)
                         return 0
 
                     sleep(SLEEP_INTERVAL_AFTER_CENTER)
@@ -842,15 +925,18 @@ class Application:
                 log('No free slots found at selected centers. Trying another round in %s sec...', SLEEP_INTERVAL_AFTER_RUN)
                 sleep(SLEEP_INTERVAL_AFTER_RUN)
             except CityNotFound as e:
+                execution.status(1,e)
                 print('\n%s: City %s not found. Make sure you selected a city from the available countries.' % (
                     colored('Error', 'red'), colored(e, 'yellow')))
                 return 1
             except (ReadTimeout, ConnectionError, NewConnectionError) as e:
+                execution.status(1,e)
                 print('\n%s' % (colored(
                     'Connection error. Check your internet connection. Retrying ...', 'red')))
                 print(str(e))
                 sleep(SLEEP_INTERVAL_AFTER_CONNECTION_ERROR)
             except Exception as e:
+                execution.status(1,e)
                 template = "An unexpected exception of type {0} occurred. Arguments:\n{1!r}"
                 message = template.format(type(e).__name__, e.args)
                 print(message)
@@ -860,7 +946,11 @@ class Application:
 
 if __name__ == '__main__':
     try:
+        '''started execution'''
+        execution.status(0)
         sys.exit(Application().main())
-    except KeyboardInterrupt:
+        
+    except KeyboardInterrupt as e:
+        execution.status(1,e)
         print('Abort.')
         sys.exit(1)
